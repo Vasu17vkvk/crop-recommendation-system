@@ -25,9 +25,15 @@ encoder = joblib.load("india_crop_encoder_v3.pkl")
 # EARTH ENGINE INIT
 # =====================================================
 
+import json
+
+service_account_info = dict(
+    st.secrets["gcp_service_account"]
+)
+
 credentials = ee.ServiceAccountCredentials(
-    None,
-    "service-account.json"
+    service_account_info["client_email"],
+    key_data=json.dumps(service_account_info)
 )
 
 ee.Initialize(credentials)
