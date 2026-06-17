@@ -1,96 +1,346 @@
 import streamlit as st
 import pandas as pd
 import joblib
+import folium
+from streamlit_folium import st_folium
+import ee
 
-# ======================
+# =====================================================
+# PAGE CONFIG
+# =====================================================
+
+st.set_page_config(
+    page_title="AI Crop Recommendation System",
+    layout="wide"
+)
+
+# =====================================================
 # LOAD MODEL
-# ======================
+# =====================================================
 
 model = joblib.load("india_crop_model_v3.pkl")
 encoder = joblib.load("india_crop_encoder_v3.pkl")
 
-st.title("🌾 Crop Recommendation System")
+# =====================================================
+# EARTH ENGINE INIT
+# =====================================================
 
-st.write("Enter feature values")
-
-# ======================
-# INPUTS
-# ======================
-
-NDVI = st.number_input("NDVI", value=0.50)
-EVI = st.number_input("EVI", value=0.30)
-NDWI = st.number_input("NDWI", value=0.10)
-
-Elevation = st.number_input("Elevation", value=200.0)
-Rainfall = st.number_input("Rainfall", value=800.0)
-
-Nitrogen_High = st.number_input("Nitrogen High", value=20.0)
-Nitrogen_Medium = st.number_input("Nitrogen Medium", value=60.0)
-Nitrogen_Low = st.number_input("Nitrogen Low", value=20.0)
-
-Phosphorous_High = st.number_input("Phosphorous High", value=20.0)
-Phosphorous_Medium = st.number_input("Phosphorous Medium", value=60.0)
-Phosphorous_Low = st.number_input("Phosphorous Low", value=20.0)
-
-Potassium_High = st.number_input("Potassium High", value=20.0)
-Potassium_Medium = st.number_input("Potassium Medium", value=60.0)
-Potassium_Low = st.number_input("Potassium Low", value=20.0)
-
-pH_Acidic = st.number_input("pH Acidic", value=5.0)
-pH_Neutral = st.number_input("pH Neutral", value=90.0)
-pH_Alkaline = st.number_input("pH Alkaline", value=5.0)
-
-# ======================
-# PREDICT
-# ======================
-
-if st.button("Predict Crop"):
-
-    data = pd.DataFrame([{
-        "NDVI": NDVI,
-        "EVI": EVI,
-        "NDWI": NDWI,
-
-        "Elevation": Elevation,
-        "Rainfall": Rainfall,
-
-        "Nitrogen_High": Nitrogen_High,
-        "Nitrogen_Medium": Nitrogen_Medium,
-        "Nitrogen_Low": Nitrogen_Low,
-
-        "Phosphorous_High": Phosphorous_High,
-        "Phosphorous_Medium": Phosphorous_Medium,
-        "Phosphorous_Low": Phosphorous_Low,
-
-        "Potassium_High": Potassium_High,
-        "Potassium_Medium": Potassium_Medium,
-        "Potassium_Low": Potassium_Low,
-
-        "pH_Acidic": pH_Acidic,
-        "pH_Neutral": pH_Neutral,
-        "pH_Alkaline": pH_Alkaline
-    }])
-
-prediction = model.predict(data)
-
-crop = encoder.inverse_transform(prediction)
-
-probabilities = model.predict_proba(data)[0]
-
-top3_idx = probabilities.argsort()[-3:][::-1]
-
-st.success(
-    f"🌾 Recommended Crop: {crop[0]}"
+credentials = ee.ServiceAccountCredentials(
+    None,
+    "service-account.json"
 )
 
-st.subheader("Top 3 Crops")
+ee.Initialize(credentials)
 
-for idx in top3_idx:
+# =====================================================
+# FEATURE EXTRACTION
+# =====================================================
 
-    crop_name = encoder.inverse_transform([idx])[0]
+def get_features(lat, lon):
 
-    confidence = probabilities[idx] * 100
+    point = ee.Geometry.Point([lon, lat])
 
-    st.write(
-        f"{crop_name} : {confidence:.2f}%"
+    image = (
+        ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+        .filterBounds(point)
+        .filterDate("2024-01-01", "2024-12-31")
+        .sort("CLOUDY_PIXEL_PERCENTAGE")
+        .first()
     )
+
+    ndvi = image.normalizedDifference(
+        ["B8", "B4"]
+    ).rename("NDVI")
+
+    evi = image.expression(
+        "2.5*((NIR-RED)/(NIR+6*RED-7.5*BLUE+1))",
+        {
+            "NIR": image.select("B8"),
+            "RED": image.select("B4"),
+            "BLUE": image.select("B2")
+        }
+    ).rename("EVI")
+
+    ndwi = image.normalizedDifference(
+        ["B3", "B8"]
+    ).rename("NDWI")
+
+    elevation = ee.Image(
+        "USGS/SRTMGL1_003"
+    ).rename("Elevation")
+
+    rainfall = (
+        ee.ImageCollection("UCSB-CHG/CHIRPS/DAILY")
+        .filterDate("2024-01-01", "2024-12-31")
+        .sum()
+        .rename("Rainfall")
+    )
+
+    values = (
+        ee.Image.cat([
+            ndvi,
+            evi,
+            ndwi,
+            elevation,
+            rainfall
+        ])
+        .reduceRegion(
+            reducer=ee.Reducer.mean(),
+            geometry=point,
+            scale=30,
+            maxPixels=1e9
+        )
+    )
+
+    return values.getInfo()
+
+# =====================================================
+# TITLE
+# =====================================================
+
+st.title("🌾 AI Crop Recommendation System")
+
+st.write(
+    "Click anywhere on the map to automatically fetch satellite data and predict the best crop."
+)
+
+# =====================================================
+# MAP
+# =====================================================
+
+m = folium.Map(
+    location=[23.5, 80],
+    zoom_start=5
+)
+
+map_data = st_folium(
+    m,
+    width=1000,
+    height=500
+)
+
+# =====================================================
+# USER CLICK
+# =====================================================
+
+if map_data.get("last_clicked"):
+
+    lat = map_data["last_clicked"]["lat"]
+    lon = map_data["last_clicked"]["lng"]
+
+    st.success(f"Latitude : {lat}")
+    st.success(f"Longitude : {lon}")
+
+    with st.spinner("Fetching satellite features..."):
+
+        try:
+
+            features = get_features(lat, lon)
+
+            ndvi = float(features.get("NDVI", 0))
+            evi = float(features.get("EVI", 0))
+            ndwi = float(features.get("NDWI", 0))
+            elevation = float(features.get("Elevation", 0))
+            rainfall = float(features.get("Rainfall", 0))
+
+            st.subheader("🛰️ Satellite Features")
+
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                st.metric(
+                    "NDVI",
+                    round(ndvi, 4)
+                )
+
+            with col2:
+                st.metric(
+                    "EVI",
+                    round(evi, 4)
+                )
+
+            with col3:
+                st.metric(
+                    "NDWI",
+                    round(ndwi, 4)
+                )
+
+            col4, col5 = st.columns(2)
+
+            with col4:
+                st.metric(
+                    "Elevation (m)",
+                    round(elevation, 2)
+                )
+
+            with col5:
+                st.metric(
+                    "Rainfall (mm)",
+                    round(rainfall, 2)
+                )
+
+            # =====================================================
+            # SOIL PARAMETERS
+            # =====================================================
+
+            st.subheader("🧪 Soil Parameters")
+
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+
+                Nitrogen_High = st.slider(
+                    "Nitrogen High",
+                    0.0, 100.0, 20.0
+                )
+
+                Nitrogen_Medium = st.slider(
+                    "Nitrogen Medium",
+                    0.0, 100.0, 60.0
+                )
+
+                Nitrogen_Low = st.slider(
+                    "Nitrogen Low",
+                    0.0, 100.0, 20.0
+                )
+
+            with col2:
+
+                Phosphorous_High = st.slider(
+                    "Phosphorous High",
+                    0.0, 100.0, 20.0
+                )
+
+                Phosphorous_Medium = st.slider(
+                    "Phosphorous Medium",
+                    0.0, 100.0, 60.0
+                )
+
+                Phosphorous_Low = st.slider(
+                    "Phosphorous Low",
+                    0.0, 100.0, 20.0
+                )
+
+            with col3:
+
+                Potassium_High = st.slider(
+                    "Potassium High",
+                    0.0, 100.0, 20.0
+                )
+
+                Potassium_Medium = st.slider(
+                    "Potassium Medium",
+                    0.0, 100.0, 60.0
+                )
+
+                Potassium_Low = st.slider(
+                    "Potassium Low",
+                    0.0, 100.0, 20.0
+                )
+
+            # =====================================================
+            # PH
+            # =====================================================
+
+            st.subheader("⚗️ Soil pH")
+
+            col4, col5, col6 = st.columns(3)
+
+            with col4:
+
+                pH_Acidic = st.slider(
+                    "pH Acidic",
+                    0.0, 100.0, 5.0
+                )
+
+            with col5:
+
+                pH_Neutral = st.slider(
+                    "pH Neutral",
+                    0.0, 100.0, 90.0
+                )
+
+            with col6:
+
+                pH_Alkaline = st.slider(
+                    "pH Alkaline",
+                    0.0, 100.0, 5.0
+                )
+
+            # =====================================================
+            # PREDICTION
+            # =====================================================
+
+            if st.button("🌾 Predict Crop"):
+
+                data = pd.DataFrame([{
+
+                    "NDVI": ndvi,
+                    "EVI": evi,
+                    "NDWI": ndwi,
+
+                    "Elevation": elevation,
+                    "Rainfall": rainfall,
+
+                    "Nitrogen_High": Nitrogen_High,
+                    "Nitrogen_Medium": Nitrogen_Medium,
+                    "Nitrogen_Low": Nitrogen_Low,
+
+                    "Phosphorous_High": Phosphorous_High,
+                    "Phosphorous_Medium": Phosphorous_Medium,
+                    "Phosphorous_Low": Phosphorous_Low,
+
+                    "Potassium_High": Potassium_High,
+                    "Potassium_Medium": Potassium_Medium,
+                    "Potassium_Low": Potassium_Low,
+
+                    "pH_Acidic": pH_Acidic,
+                    "pH_Neutral": pH_Neutral,
+                    "pH_Alkaline": pH_Alkaline
+                }])
+
+                prediction = model.predict(data)
+
+                crop = encoder.inverse_transform(
+                    prediction
+                )
+
+                probabilities = model.predict_proba(
+                    data
+                )[0]
+
+                top3_idx = probabilities.argsort()[-3:][::-1]
+
+                st.success(
+                    f"🌾 Recommended Crop: {crop[0]}"
+                )
+
+                st.subheader(
+                    "🏆 Top 3 Crop Recommendations"
+                )
+
+                medals = ["🥇", "🥈", "🥉"]
+
+                for rank, idx in enumerate(top3_idx):
+
+                    crop_name = encoder.inverse_transform(
+                        [idx]
+                    )[0]
+
+                    confidence = (
+                        probabilities[idx] * 100
+                    )
+
+                    st.write(
+                        f"{medals[rank]} {crop_name} : {confidence:.2f}%"
+                    )
+
+                    st.progress(
+                        float(confidence / 100)
+                    )
+
+        except Exception as e:
+
+            st.error(
+                f"Earth Engine Error: {str(e)}"
+            )

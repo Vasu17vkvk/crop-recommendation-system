@@ -3,7 +3,13 @@ pandas
 numpy
 scikit-learn
 joblib
-earthengine-api
-geemap
+
 folium
 streamlit-folium
+
+earthengine-api
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+
+requests
