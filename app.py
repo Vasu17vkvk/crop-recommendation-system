@@ -21,6 +21,10 @@ st.set_page_config(
 model = joblib.load("india_crop_model_v3.pkl")
 encoder = joblib.load("india_crop_encoder_v3.pkl")
 
+soil_df = pd.read_csv(
+    "India_Crop_Features.csv"
+)
+
 # =====================================================
 # EARTH ENGINE INIT
 # =====================================================
@@ -101,6 +105,69 @@ def get_features(lat, lon):
     return values.getInfo()
 
 # =====================================================
+# NEAREST SOIL DATA
+# =====================================================
+
+def get_nearest_soil(lat, lon):
+
+    temp = soil_df.copy()
+
+    temp["distance"] = (
+        (temp["Latitude"] - lat) ** 2 +
+        (temp["Longitude"] - lon) ** 2
+    )
+
+    nearest5 = temp.nsmallest(
+        5,
+        "distance"
+    )
+
+    return {
+
+        "Nitrogen_High":
+            nearest5["Nitrogen_High"].mean(),
+
+        "Nitrogen_Medium":
+            nearest5["Nitrogen_Medium"].mean(),
+
+        "Nitrogen_Low":
+            nearest5["Nitrogen_Low"].mean(),
+
+        "Phosphorous_High":
+            nearest5["Phosphorous_High"].mean(),
+
+        "Phosphorous_Medium":
+            nearest5["Phosphorous_Medium"].mean(),
+
+        "Phosphorous_Low":
+            nearest5["Phosphorous_Low"].mean(),
+
+        "Potassium_High":
+            nearest5["Potassium_High"].mean(),
+
+        "Potassium_Medium":
+            nearest5["Potassium_Medium"].mean(),
+
+        "Potassium_Low":
+            nearest5["Potassium_Low"].mean(),
+
+        "pH_Acidic":
+            nearest5["pH_Acidic"].mean(),
+
+        "pH_Neutral":
+            nearest5["pH_Neutral"].mean(),
+
+        "pH_Alkaline":
+            nearest5["pH_Alkaline"].mean(),
+
+        "Region":
+            nearest5.iloc[0]["Region"],
+
+        "Address":
+            nearest5.iloc[0]["Address"]
+    }
+
+# =====================================================
 # TITLE
 # =====================================================
 
@@ -143,11 +210,20 @@ if map_data.get("last_clicked"):
 
             features = get_features(lat, lon)
 
+            soil = get_nearest_soil(
+                lat,
+                lon
+            )
+
             ndvi = float(features.get("NDVI", 0))
             evi = float(features.get("EVI", 0))
             ndwi = float(features.get("NDWI", 0))
             elevation = float(features.get("Elevation", 0))
             rainfall = float(features.get("Rainfall", 0))
+
+            # =====================================================
+            # SATELLITE FEATURES
+            # =====================================================
 
             st.subheader("🛰️ Satellite Features")
 
@@ -185,6 +261,58 @@ if map_data.get("last_clicked"):
                     round(rainfall, 2)
                 )
 
+            # =====================================================
+            # AUTO SOIL INFORMATION
+            # =====================================================
+
+            st.subheader("🌱 Auto Soil Information")
+
+            col6, col7 = st.columns(2)
+
+            with col6:
+                st.metric(
+                    "Region",
+                    soil["Region"]
+                )
+
+            with col7:
+                st.metric(
+                    "Nearest Location",
+                    soil["Address"]
+                )
+
+            st.json({
+                "Nitrogen_High": round(soil["Nitrogen_High"], 2),
+                "Nitrogen_Medium": round(soil["Nitrogen_Medium"], 2),
+                "Nitrogen_Low": round(soil["Nitrogen_Low"], 2),
+
+                "Phosphorous_High": round(soil["Phosphorous_High"], 2),
+                "Phosphorous_Medium": round(soil["Phosphorous_Medium"], 2),
+                "Phosphorous_Low": round(soil["Phosphorous_Low"], 2),
+
+                "Potassium_High": round(soil["Potassium_High"], 2),
+                "Potassium_Medium": round(soil["Potassium_Medium"], 2),
+                "Potassium_Low": round(soil["Potassium_Low"], 2),
+
+                "pH_Acidic": round(soil["pH_Acidic"], 2),
+                "pH_Neutral": round(soil["pH_Neutral"], 2),
+                "pH_Alkaline": round(soil["pH_Alkaline"], 2),
+            })
+
+            # =====================================================
+            # EXISTING SOIL SLIDERS (TEMPORARY)
+            # =====================================================
+
+            st.subheader("🧪 Soil Parameters")
+
+            # Abhi sliders rehne do
+            # Step 6 me remove karenge
+
+        except Exception as e:
+
+            st.error(
+                f"Earth Engine Error: {str(e)}"
+            )
             # =====================================================
             # SOIL PARAMETERS
             # =====================================================
